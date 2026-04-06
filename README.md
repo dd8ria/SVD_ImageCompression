@@ -12,13 +12,7 @@ git clone [https://github.com/dd8ria/SVD_ImageCompression.git](https://github.co
 ## Usage
 
 1. Activate Python virtual environment
-
-For POSIX:
-```bash
-python -m venv venv
-source venv/bin/activate
-```
-
+   
 For Windows:
 ```bash
 python -m venv venv
