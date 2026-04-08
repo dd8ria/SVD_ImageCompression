@@ -47,3 +47,4 @@ SVD_ImageCompression/
 
 *Liubenchuk Anastasia*: <https://youtu.be/muf06BzSLc4>
 *Nychyporuk Daryna*: <https://youtu.be/FMxZhcgDXH8?si=jaU7KPIPAdMayCaw>
+*Yablunovska Anastasiia*: <https://youtu.be/x4bEj-PvBo4>
