@@ -55,16 +55,175 @@ def save_image(arr, save_path):
         raise ValueError(f"Unsupported image shape: {arr_uint8.shape}")
 
 
-def compute_thin_svd(matrix):
-    if matrix.ndim != 2:
-        raise ValueError("SVD expects a 2D array.")
-    return np.linalg.svd(matrix, full_matrices=False)
+def _normalize(vec, tol=1e-12):
+    norm = np.linalg.norm(vec)
+    if norm < tol:
+        return None
+    return vec / norm
 
 
-def compute_singular_values_only(matrix):
+def _orthogonalize_against_basis(vec, basis, tol=1e-12):
+    out = vec.astype(np.float64, copy=True)
+    for b in basis:
+        out -= np.dot(b, out) * b
+    return _normalize(out, tol=tol)
+
+
+def _power_iteration_symmetric(matrix, basis=None, max_iter=2000, tol=1e-10, seed=42):
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("Power iteration expects a square matrix.")
+
+    n = matrix.shape[0]
+    basis = [] if basis is None else basis
+    rng = np.random.default_rng(seed)
+
+    vector = None
+    for _ in range(10):
+        candidate = rng.standard_normal(n)
+        candidate = _orthogonalize_against_basis(candidate, basis, tol=tol)
+        if candidate is not None:
+            vector = candidate
+            break
+    if vector is None:
+        return 0.0, np.zeros(n, dtype=np.float64)
+
+    for _ in range(max_iter):
+        next_vector = matrix @ vector
+        next_vector = _orthogonalize_against_basis(next_vector, basis, tol=tol)
+
+        if next_vector is None:
+            eigenvalue = float(vector @ (matrix @ vector))
+            return max(eigenvalue, 0.0), vector
+
+        if min(
+            np.linalg.norm(next_vector - vector),
+            np.linalg.norm(next_vector + vector),
+        ) < tol:
+            vector = next_vector
+            break
+
+        vector = next_vector
+
+    eigenvalue = float(vector @ (matrix @ vector))
+    return max(eigenvalue, 0.0), vector
+
+
+def _manual_symmetric_eigendecomposition(matrix, tol=1e-10, max_iter=2000, seed=42):
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("Eigen-decomposition expects a square matrix.")
+
+    n = matrix.shape[0]
+    eigenvalues = []
+    eigenvectors = []
+
+    for idx in range(n):
+        eigenvalue, eigenvector = _power_iteration_symmetric(
+            matrix,
+            basis=eigenvectors,
+            max_iter=max_iter,
+            tol=tol,
+            seed=seed + idx,
+        )
+
+        if eigenvalue <= tol or np.linalg.norm(eigenvector) < tol:
+            break
+
+        eigenvalues.append(eigenvalue)
+        eigenvectors.append(eigenvector)
+
+    if not eigenvalues:
+        return np.array([], dtype=np.float64), np.zeros((n, 0), dtype=np.float64)
+
+    eigenvalues = np.array(eigenvalues, dtype=np.float64)
+    eigenvectors = np.column_stack(eigenvectors)
+
+    order = np.argsort(eigenvalues)[::-1]
+    eigenvalues = eigenvalues[order]
+    eigenvectors = eigenvectors[:, order]
+
+    return eigenvalues, eigenvectors
+
+
+def compute_thin_svd(matrix, tol=1e-10, max_iter=2000, seed=42):
     if matrix.ndim != 2:
         raise ValueError("SVD expects a 2D array.")
-    return np.linalg.svd(matrix, full_matrices=False, compute_uv=False)
+
+    A = matrix.astype(np.float64)
+    m, n = A.shape
+
+    if m >= n:
+        gram = A.T @ A
+        eigenvalues, V = _manual_symmetric_eigendecomposition(
+            gram, tol=tol, max_iter=max_iter, seed=seed
+        )
+        singular_values = np.sqrt(np.maximum(eigenvalues, 0.0))
+
+        if singular_values.size == 0:
+            return np.zeros((m, 0)), np.array([], dtype=np.float64), np.zeros((0, n))
+
+        keep = singular_values > tol
+        singular_values = singular_values[keep]
+        V = V[:, keep]
+
+        U_cols = []
+        kept_s = []
+
+        for idx, sigma in enumerate(singular_values):
+            u = (A @ V[:, idx]) / sigma
+            u = _normalize(u, tol=tol)
+            if u is None:
+                continue
+            U_cols.append(u)
+            kept_s.append(sigma)
+
+        if not U_cols:
+            return np.zeros((m, 0)), np.array([], dtype=np.float64), np.zeros((0, n))
+
+        U = np.column_stack(U_cols)
+        singular_values = np.array(kept_s, dtype=np.float64)
+        r = len(singular_values)
+        V = V[:, :r]
+        Vt = V.T
+        return U, singular_values, Vt
+
+    gram = A @ A.T
+    eigenvalues, U = _manual_symmetric_eigendecomposition(
+        gram, tol=tol, max_iter=max_iter, seed=seed
+    )
+    singular_values = np.sqrt(np.maximum(eigenvalues, 0.0))
+
+    if singular_values.size == 0:
+        return np.zeros((m, 0)), np.array([], dtype=np.float64), np.zeros((0, n))
+
+    keep = singular_values > tol
+    singular_values = singular_values[keep]
+    U = U[:, keep]
+
+    V_cols = []
+    kept_s = []
+
+    for idx, sigma in enumerate(singular_values):
+        v = (A.T @ U[:, idx]) / sigma
+        v = _normalize(v, tol=tol)
+        if v is None:
+            continue
+        V_cols.append(v)
+        kept_s.append(sigma)
+
+    if not V_cols:
+        return np.zeros((m, 0)), np.array([], dtype=np.float64), np.zeros((0, n))
+
+    V = np.column_stack(V_cols)
+    singular_values = np.array(kept_s, dtype=np.float64)
+    r = len(singular_values)
+    U = U[:, :r]
+    Vt = V.T
+    return U, singular_values, Vt
+
+
+def compute_singular_values_only(matrix, tol=1e-10, max_iter=2000, seed=42):
+    _, s, _ = compute_thin_svd(matrix, tol=tol, max_iter=max_iter, seed=seed)
+    return s
 
 
 def reconstruct_from_svd(U, s, Vt, k):
